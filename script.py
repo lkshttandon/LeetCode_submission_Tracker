@@ -1,3 +1,4 @@
+import requests
 import streamlit as st
 import pandas as pd
 import datetime
@@ -23,13 +24,17 @@ def load_data():
 def save_data(df):
     df.to_csv(CSV_FILE, index=False, date_format='%d-%m-%Y')
 
-def add_submission(df, date, count):
+
+def add_submission(df, date, count, manual=False):
     date = pd.to_datetime(date, dayfirst=True)
     if date in df['date'].values:
-        df.loc[df['date'] == date, 'count'] += count
+        existing_count = df.loc[df['date'] == date, 'count'].values[0]
+        if manual or existing_count < count:
+            df.loc[df['date'] == date, 'count'] += count
     else:
         df = pd.concat([df, pd.DataFrame([[date, count]], columns=['date', 'count'])])
     return df.sort_values(by='date')
+
 
 def calculate_streak(df):
     df = df.sort_values(by='date', ascending=False)
@@ -56,6 +61,41 @@ def filter_last_days(df, days):
     cutoff = datetime.date.today() - datetime.timedelta(days=days)
     return df[df['date'].dt.date >= cutoff]
 
+def fetch_leetcode_submissions(username):
+    url = "https://leetcode.com/graphql"
+    headers = {
+        "Content-Type": "application/json",
+        "Referer": f"https://leetcode.com/{username}/"
+    }
+
+    query = {
+        "operationName": "userProfileCalendar",
+        "variables": {"username": username},
+        "query": """
+        query userProfileCalendar($username: String!) {
+            matchedUser(username: $username) {
+                userCalendar {
+                    submissionCalendar
+                }
+            }
+        }
+        """
+    }
+
+    response = requests.post(url, json=query, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        raw_calendar = data["data"]["matchedUser"]["userCalendar"]["submissionCalendar"]
+        calendar = eval(raw_calendar)  # Converts JSON string with timestamps to dict
+        daily_counts = {
+            datetime.date.fromtimestamp(int(ts)): count for ts, count in calendar.items()
+        }
+        return daily_counts
+    else:
+        st.error("Failed to fetch LeetCode data. Check username or try later.")
+        return {}
+
+
 def main():
     st.set_page_config(page_title="LeetCode Tracker", layout="centered", initial_sidebar_state="auto")
     st.markdown("""
@@ -66,13 +106,25 @@ def main():
     """, unsafe_allow_html=True)
 
     st.title("🧠 LeetCode Tracker")
+    st.subheader("🔄 Auto Sync with LeetCode")
+    
+    # Load existing data
     df = load_data()
+
+    username = 'ltandon'
+
+    if username:
+        submission_data = fetch_leetcode_submissions(username)
+        for date, count in submission_data.items():
+            df = add_submission(df, date, count, False)
+        save_data(df)
+        st.success("LeetCode data synced!")
 
     with st.form(key="submission_form"):
         count = st.number_input("Submissions today", min_value=0, step=1)
         submit = st.form_submit_button("Add")
         if submit and count > 0:
-            df = add_submission(df, datetime.date.today(), count)
+            df = add_submission(df, datetime.date.today(), count, True)
             save_data(df)
             st.success("Submission added!")
 
@@ -178,12 +230,6 @@ def main():
 
     st.subheader("🔔 Reminders")
     st.info("Don't forget to submit your daily progress! Set an alarm or calendar event.")
-
-    # st.subheader("📤 Sync to GitHub")
-    # st.caption("Coming soon: Auto-sync with your GitHub repo for backups.")
-    #
-    # st.subheader("📱 Installable App")
-    # st.markdown("This web app is a PWA — try deploying via [Streamlit Share](https://share.streamlit.io) and install on your device!")
 
 if __name__ == '__main__':
     main()
