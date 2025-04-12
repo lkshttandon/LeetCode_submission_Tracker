@@ -6,11 +6,21 @@ import io
 import matplotlib.pyplot as plt
 import altair as alt
 import plotly.express as px
+import subprocess
+import sys
 
 CSV_FILE = "leetcode_submissions.csv"
 TARGET = 500
 WEEKLY_GOAL = 50
 MONTHLY_GOAL = 200
+
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Example usage
+install("matplotlib")
+install("plotly")
+install("altair")
 
 def load_data():
     if os.path.exists(CSV_FILE):
