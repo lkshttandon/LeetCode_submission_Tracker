@@ -40,15 +40,15 @@ def calculate_streak(df):
     df = df.sort_values(by='date', ascending=False)
     streak = 0
     today = datetime.date.today()
+
     for _, row in df.iterrows():
-        if row['date'].date() == today:
-            streak += 1
-            today -= datetime.timedelta(days=1)
-        elif row['date'].date() == today - datetime.timedelta(days=1):
+        row_date = row['date'].date()
+        if row_date == today:
             streak += 1
             today -= datetime.timedelta(days=1)
         else:
-            break
+            break  # as soon as we hit a missing day, stop
+
     return streak
 
 def missed_days(df, num_days=10):
