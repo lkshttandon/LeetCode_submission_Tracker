@@ -23,13 +23,18 @@ def load_data():
 
 def save_data(df):
     df.to_csv(CSV_FILE, index=False, date_format='%d-%m-%Y')
+
 def add_submission(df, date, count, manual=False):
     date = pd.to_datetime(date, dayfirst=True)
 
     if date in df['date'].values:
+        existing_count = df.loc[df['date'] == date, 'count'].values[0]
         if manual:
             # Ensure 'Manual count' is initialized properly
             df.loc[df['date'] == date, 'Manual count'] = df.loc[df['date'] == date, 'Manual count'].fillna(0) + count
+        if existing_count < count:
+            df.loc[df['date'] == date, 'count'] = count
+
     else:
         new_row = {
             'date': date,
@@ -107,40 +112,35 @@ def get_monthly_heatmap_data(df):
 
     return merged_df
 
-
 def create_green_heatmap(df):
     monthly_heatmap_df = get_monthly_heatmap_data(df)
 
-    # Plot the heatmap with green colors and block-like look
     fig = px.imshow(
-        [monthly_heatmap_df['submissions'].tolist()],  # 2D list for 1-row heatmap
-        labels=dict(x="Date", y=""),
+        [monthly_heatmap_df['submissions'].tolist()],
+        labels=dict(x="", y=""),
         x=monthly_heatmap_df['date'].astype(str),
-        color_continuous_scale='greens',  # Green color scale
+        color_continuous_scale='greens',
         aspect="auto",
-        text_auto=True  # Display submission count inside blocks
+        text_auto=True
     )
 
     fig.update_layout(
         title="📅 Daily Submissions Heatmap (This Month)",
-        xaxis_title="Date",
+        xaxis_title="",
         yaxis_showticklabels=False,
-        coloraxis_colorbar=dict(title="Submissions"),
-        xaxis=dict(tickmode='array', tickvals=monthly_heatmap_df['date'].astype(str)),
-        xaxis_tickangle=-45,  # Rotate date labels for better visibility
-    )
-
-    # Adjusting the block size and formatting
-    fig.update_traces(
-        colorbar_tickvals=[1, 5, 10, 20],  # Show specific values on the color bar
-        colorbar_ticktext=["Low", "Medium", "High", "Very High"]
+        coloraxis_showscale=False,
+        height=250,
+        xaxis=dict(
+            tickmode='array',
+            tickvals=monthly_heatmap_df['date'].astype(str),
+            tickangle=-45
+        ),
+        margin=dict(t=30, b=30, l=10, r=10)
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-
-
-def fetch_leetcode_submissions(username):
+def fetch_leetcode_data(username):
     url = "https://leetcode.com/graphql"
     headers = {
         "Content-Type": "application/json",
@@ -148,32 +148,45 @@ def fetch_leetcode_submissions(username):
     }
 
     query = {
-        "operationName": "userProfileCalendar",
+        "operationName": "getUserProfile",
         "variables": {"username": username},
         "query": """
-        query userProfileCalendar($username: String!) {
-            matchedUser(username: $username) {
-                userCalendar {
-                    submissionCalendar
-                }
+        query getUserProfile($username: String!) {
+          allQuestionsCount {
+            difficulty
+            count
+          }
+          matchedUser(username: $username) {
+            submitStats {
+              acSubmissionNum {
+                difficulty
+                count
+              }
             }
+            userCalendar {
+              submissionCalendar
+            }
+          }
         }
         """
     }
 
     response = requests.post(url, json=query, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        raw_calendar = data["data"]["matchedUser"]["userCalendar"]["submissionCalendar"]
-        calendar = eval(raw_calendar)  # Converts JSON string with timestamps to dict
-        daily_counts = {
-            datetime.date.fromtimestamp(int(ts)): count for ts, count in calendar.items()
-        }
-        return daily_counts
-    else:
+    if response.status_code != 200:
         st.error("Failed to fetch LeetCode data. Check username or try later.")
-        return {}
+        return {}, {}
 
+    data = response.json()["data"]
+    calendar = eval(data["matchedUser"]["userCalendar"]["submissionCalendar"])
+    daily_counts = {
+        datetime.date.fromtimestamp(int(ts)): count for ts, count in calendar.items()
+    }
+
+    stats = data["matchedUser"]["submitStats"]["acSubmissionNum"]
+    solved = {item["difficulty"]: item["count"] for item in stats}
+    all_qs = {entry["difficulty"]: entry["count"] for entry in data["allQuestionsCount"]}
+
+    return daily_counts, solved, all_qs
 
 def main():
     st.set_page_config(page_title="LeetCode Tracker", layout="centered", initial_sidebar_state="auto")
@@ -187,16 +200,37 @@ def main():
     st.title("🧠 LeetCode Tracker")
     st.subheader("🔄 Auto Sync with LeetCode")
     
-    df = load_data()
+    submitted_df = load_data()
 
     username = 'ltandon'
 
     if username:
-        submission_data = fetch_leetcode_submissions(username)
-        for date, count in submission_data.items():
-            df = add_submission(df, date, count, False)
-        save_data(df)
-        st.success("LeetCode data synced!")
+        try:
+            submission_data, solved_qs, all_qs = fetch_leetcode_data(username)
+            for date, count in submission_data.items():
+                df = add_submission(submitted_df, date, count, False)
+            save_data(submitted_df)
+            st.success("LeetCode data synced!")
+            name = {"Easy":"🟢 **Easy:**", "Medium":"🟡 **Medium:**", "Hard":"🔴 **Hard:**"}
+            for diff in ["Easy", "Medium", "Hard"]:
+                total_question = all_qs.get(diff, 0)
+                solved = solved_qs.get(diff, 0)
+                percent = solved / total_question if total_question else 0
+
+                st.subheader(f"{name.get(diff)} Problems")
+                st.text(f"{solved} / {total_question} solved")
+                st.progress(percent)
+
+            # Overall progress
+            total_all = all_qs.get('All')
+            solved_all = solved_qs.get('All')
+            st.subheader("🌟 Overall Progress")
+            st.text(f"{solved_all} / {total_all} solved")
+            st.progress(solved_all / total_all)
+
+        except Exception as e:
+            st.error("Error fetching data from LeetCode. Please check your username or try again later.")
+            st.code(str(e))
 
     with st.form(key="submission_form"):
         count = st.number_input("Submissions today", min_value=0, step=1)
@@ -233,7 +267,7 @@ def main():
     st.progress(min(weekly / WEEKLY_GOAL, 1.0))
     st.markdown(f"🗓️ This month (April): {monthly} / {MONTHLY_GOAL}")
     st.progress(min(monthly / MONTHLY_GOAL, 1.0))
-    
+
     create_green_heatmap(df)
 
     # Charts
