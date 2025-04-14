@@ -19,20 +19,29 @@ def load_data():
         df['date'] = pd.to_datetime(df['date'], dayfirst=True)
         return df.sort_values(by='date')
     else:
-        return pd.DataFrame(columns=['date', 'count'])
+        return pd.DataFrame(columns=['date', 'count', 'Manual count'])
 
 def save_data(df):
     df.to_csv(CSV_FILE, index=False, date_format='%d-%m-%Y')
-
-
 def add_submission(df, date, count, manual=False):
     date = pd.to_datetime(date, dayfirst=True)
+
     if date in df['date'].values:
-        existing_count = df.loc[df['date'] == date, 'count'].values[0]
-        if manual or existing_count < count:
-            df.loc[df['date'] == date, 'count'] += count
+        if manual:
+            # Ensure 'Manual count' is initialized properly
+            df.loc[df['date'] == date, 'Manual count'] = df.loc[df['date'] == date, 'Manual count'].fillna(0) + count
     else:
-        df = pd.concat([df, pd.DataFrame([[date, count]], columns=['date', 'count'])])
+        new_row = {
+            'date': date,
+            'count': 0,
+            'Manual count': 0
+        }
+        if manual:
+            new_row['Manual count'] = count
+        else:
+            new_row['count'] = count
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+
     return df.sort_values(by='date')
 
 
@@ -57,9 +66,79 @@ def missed_days(df, num_days=10):
     missed = [today - datetime.timedelta(days=i) for i in range(1, num_days+1) if (today - datetime.timedelta(days=i)) not in dates_set]
     return missed
 
-def filter_last_days(df, days):
-    cutoff = datetime.date.today() - datetime.timedelta(days=days)
-    return df[df['date'].dt.date >= cutoff]
+def get_current_week_data(df):
+    today = datetime.date.today()
+    start_of_week = today - datetime.timedelta(days=today.weekday())  # Monday
+    end_of_week = start_of_week + datetime.timedelta(days=6)  # Sunday
+    return df[(df['date'].dt.date >= start_of_week) & (df['date'].dt.date <= end_of_week)]
+
+def get_current_month_data(df):
+    today = datetime.date.today()
+    start_of_month = datetime.date(today.year, today.month, 1)
+    return df[(df['date'].dt.date >= start_of_month) & (df['date'].dt.date <= today)]
+
+import pandas as pd
+import datetime
+
+def get_monthly_heatmap_data(df):
+    # Ensure the 'date' column is in datetime format
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+
+    # Get today's date and the start of the current month
+    today = datetime.date.today()
+    start_of_month = datetime.date(today.year, today.month, 1)
+    end_of_month = today
+
+    # Filter the data for the current month
+    month_df = df[(df['date'].dt.date >= start_of_month) & (df['date'].dt.date <= end_of_month)]
+
+    # Group by the date and sum the 'count' for each date
+    heatmap_df = month_df.groupby(df['date'].dt.date)['count'].sum().reset_index()
+    heatmap_df.columns = ['date', 'submissions']
+
+    # Create a complete range of dates for the month
+    all_days = pd.date_range(start=start_of_month, end=end_of_month)
+    full_df = pd.DataFrame({'date': all_days})
+    full_df['date'] = full_df['date'].dt.date
+
+    # Merge the full range of days with the submissions data
+    merged_df = full_df.merge(heatmap_df, on='date', how='left').fillna(0)
+    merged_df['submissions'] = merged_df['submissions'].astype(int)
+
+    return merged_df
+
+
+def create_green_heatmap(df):
+    monthly_heatmap_df = get_monthly_heatmap_data(df)
+
+    # Plot the heatmap with green colors and block-like look
+    fig = px.imshow(
+        [monthly_heatmap_df['submissions'].tolist()],  # 2D list for 1-row heatmap
+        labels=dict(x="Date", y=""),
+        x=monthly_heatmap_df['date'].astype(str),
+        color_continuous_scale='greens',  # Green color scale
+        aspect="auto",
+        text_auto=True  # Display submission count inside blocks
+    )
+
+    fig.update_layout(
+        title="📅 Daily Submissions Heatmap (This Month)",
+        xaxis_title="Date",
+        yaxis_showticklabels=False,
+        coloraxis_colorbar=dict(title="Submissions"),
+        xaxis=dict(tickmode='array', tickvals=monthly_heatmap_df['date'].astype(str)),
+        xaxis_tickangle=-45,  # Rotate date labels for better visibility
+    )
+
+    # Adjusting the block size and formatting
+    fig.update_traces(
+        colorbar_tickvals=[1, 5, 10, 20],  # Show specific values on the color bar
+        colorbar_ticktext=["Low", "Medium", "High", "Very High"]
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
 
 def fetch_leetcode_submissions(username):
     url = "https://leetcode.com/graphql"
@@ -108,7 +187,6 @@ def main():
     st.title("🧠 LeetCode Tracker")
     st.subheader("🔄 Auto Sync with LeetCode")
     
-    # Load existing data
     df = load_data()
 
     username = 'ltandon'
@@ -148,13 +226,15 @@ def main():
     st.markdown(f"🔥 **Streak:** {streak} day(s)")
 
     # Weekly/Monthly progress
-    weekly = filter_last_days(df, 7)['count'].sum()
-    monthly = filter_last_days(df, 30)['count'].sum()
+    weekly = get_current_week_data(df)['count'].sum()
+    monthly = get_current_month_data(df)['count'].sum()
     st.subheader("📈 Weekly & Monthly Goals")
-    st.markdown(f"📅 This week: {weekly} / {WEEKLY_GOAL}")
+    st.markdown(f"📅 This week (Mon–Sun): {weekly} / {WEEKLY_GOAL}")
     st.progress(min(weekly / WEEKLY_GOAL, 1.0))
-    st.markdown(f"🗓️ This month: {monthly} / {MONTHLY_GOAL}")
+    st.markdown(f"🗓️ This month (April): {monthly} / {MONTHLY_GOAL}")
     st.progress(min(monthly / MONTHLY_GOAL, 1.0))
+    
+    create_green_heatmap(df)
 
     # Charts
     st.subheader("📊 Submissions Over Time")
