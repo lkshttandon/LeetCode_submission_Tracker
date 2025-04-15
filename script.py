@@ -82,9 +82,6 @@ def get_current_month_data(df):
     start_of_month = datetime.date(today.year, today.month, 1)
     return df[(df['date'].dt.date >= start_of_month) & (df['date'].dt.date <= today)]
 
-import pandas as pd
-import datetime
-
 def get_monthly_heatmap_data(df):
     # Ensure the 'date' column is in datetime format
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
@@ -200,7 +197,7 @@ def main():
     st.title("🧠 LeetCode Tracker")
     st.subheader("🔄 Auto Sync with LeetCode")
     
-    submitted_df = load_data()
+    df = load_data()
 
     username = 'ltandon'
 
@@ -208,8 +205,8 @@ def main():
         try:
             submission_data, solved_qs, all_qs = fetch_leetcode_data(username)
             for date, count in submission_data.items():
-                df = add_submission(submitted_df, date, count, False)
-            save_data(submitted_df)
+                df = add_submission(df, date, count, False)
+            save_data(df)
             st.success("LeetCode data synced!")
             name = {"Easy":"🟢 **Easy:**", "Medium":"🟡 **Medium:**", "Hard":"🔴 **Hard:**"}
             for diff in ["Easy", "Medium", "Hard"]:
